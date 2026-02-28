@@ -1,6 +1,6 @@
 {
   "name": "proton-drive-sync",
-  "version": "0.2.3-beta.3",
+  "version": "0.2.3",
   "description": "Sync local files to Proton Drive",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc && cp -r src/db/migrations dist/db/ && mkdir -p dist/dashboard && cp src/dashboard/*.html dist/dashboard/ && cp -r src/dashboard/assets dist/dashboard/",
+    "build:css": "bunx @tailwindcss/cli -i ./src/dashboard/styles/input.css -o ./src/dashboard/assets/styles.css --minify",
     "build:check": "tsc --noEmit",
     "build:bin": "bun build --compile --minify --sourcemap ./src/index.ts --outfile ./dist/proton-drive-sync",
     "build:bin:darwin-arm64": "bun build --compile --minify --target=bun-darwin-arm64 ./src/index.ts --outfile ./dist/proton-drive-sync-darwin-arm64",

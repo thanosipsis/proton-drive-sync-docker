@@ -31,7 +31,6 @@ Makefile
 .prettierrc
 eslint.config.js
 drizzle.config.ts
-tailwind.config.js
 
 # Assets not needed for build
 readme_assets/

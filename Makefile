@@ -6,7 +6,7 @@ install:
 
 # Build Tailwind CSS
 build-css:
-	bunx tailwindcss -i ./src/dashboard/styles/input.css -o ./src/dashboard/assets/styles.css --minify
+	bun run build:css
 
 # Build standalone binary with bun (builds CSS first)
 build: build-css

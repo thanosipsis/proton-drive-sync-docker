@@ -2,11 +2,16 @@
  * Linux systemd service implementation
  * Supports both user-level (~/.config/systemd/user/) and system-level (/etc/systemd/system/) services
  * Uses file-based encrypted credential storage (no gnome-keyring dependency)
+ *
+ * Flatpak support: When running inside a Flatpak sandbox, systemctl commands are
+ * executed on the host via `flatpak-spawn --host`. The systemd service is configured
+ * to launch the app via `flatpak run` so it runs within the sandbox correctly.
  */
 
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
+import { isFlatpak } from '../../environment.js';
 import { setFlag, clearFlag, FLAGS } from '../../flags.js';
 import { logger } from '../../logger.js';
 import {
@@ -28,6 +33,8 @@ const SERVICE_NAME = 'proton-drive-sync';
 // Default encryption password for file-based credential storage
 // This is stored in the systemd service file anyway, so hardcoding doesn't reduce security
 const ENCRYPTION_PASSWORD = 'proton-drive-sync';
+
+const FLATPAK_APP_ID = 'io.github.damianbbitflipper.ProtonDriveSync';
 
 // ============================================================================
 // Path Helpers
@@ -61,6 +68,19 @@ function getPaths(scope: InstallScope): ServicePaths {
 // System Helpers
 // ============================================================================
 
+/**
+ * Spawn a command on the host system.
+ * Inside Flatpak, this uses `flatpak-spawn --host` to escape the sandbox.
+ * Outside Flatpak, it runs the command directly.
+ */
+function spawnOnHost(
+  args: string[],
+  options?: { env?: Record<string, string | undefined> }
+): { exitCode: number; stdout: Uint8Array; stderr: Uint8Array } {
+  const command = isFlatpak() ? ['flatpak-spawn', '--host', ...args] : args;
+  return Bun.spawnSync(command, options);
+}
+
 function isRunningAsRoot(): boolean {
   return process.getuid?.() === 0;
 }
@@ -71,8 +91,8 @@ function getCurrentUser(): string {
   if (sudoUser) {
     return sudoUser;
   }
-  // Fallback to whoami
-  const result = Bun.spawnSync(['whoami']);
+  // Fallback to whoami (run on host if inside Flatpak)
+  const result = spawnOnHost(['whoami']);
   return new TextDecoder().decode(result.stdout).trim();
 }
 
@@ -89,7 +109,7 @@ function runSystemctl(
       ? { ...process.env, XDG_RUNTIME_DIR: `/run/user/${getEffectiveUid()}` }
       : undefined;
 
-  const result = Bun.spawnSync(systemctlArgs, { env });
+  const result = spawnOnHost(systemctlArgs, { env });
   if (result.exitCode === 0) {
     return { success: true };
   }
@@ -110,8 +130,14 @@ function generateServiceFile(binPath: string, password: string, scope: InstallSc
   const home = getEffectiveHome();
   const uid = getEffectiveUid();
 
+  // Inside Flatpak, the systemd service should launch via `flatpak run` so the
+  // app runs within its sandbox with proper permissions and filesystem access.
+  const execStart = isFlatpak()
+    ? `flatpak run ${FLATPAK_APP_ID} start --no-daemon`
+    : `${binPath} start --no-daemon`;
+
   let content = serviceTemplate
-    .replace('{{BIN_PATH}}', binPath)
+    .replace('{{BIN_PATH}}', execStart)
     .replace(/\{\{HOME\}\}/g, home)
     .replace(/\{\{UID\}\}/g, String(uid))
     .replace('{{KEYRING_PASSWORD}}', password)
@@ -158,6 +184,10 @@ function createLinuxService(scope: InstallScope): ServiceOperations {
       }
 
       logger.info(`Installing proton-drive-sync service (${scope} scope)...`);
+
+      if (isFlatpak()) {
+        logger.info('Flatpak detected: service will be managed on the host via flatpak-spawn.');
+      }
 
       // If service exists, stop and disable it first
       if (existsSync(paths.servicePath)) {

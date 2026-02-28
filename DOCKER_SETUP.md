@@ -36,11 +36,23 @@ Run Proton Drive Sync in Docker with support for Linux x86_64 and ARM64.
 
 4. **Authenticate with Proton**
 
+   **Option A: Interactive** (supports 2FA)
+
    ```bash
    docker exec -it proton-drive-sync proton-drive-sync auth
    ```
 
    Follow the prompts to enter your Proton credentials and 2FA code if enabled.
+
+   **Option B: Headless via environment variables** (no 2FA support)
+
+   Uncomment and set `PROTON_USERNAME` and `PROTON_PASSWORD` in your `.env` file, then restart:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   The app will authenticate automatically on startup. Note: this does **not** work with accounts that have 2FA/TOTP enabled.
 
 5. **Configure sync directories**
 
@@ -59,6 +71,12 @@ Run Proton Drive Sync in Docker with support for Linux x86_64 and ARM64.
 | `DASHBOARD_PORT`   | No       | `4242`             | Dashboard port on host            |
 | `SYNC_DIR_1`       | No       | `./data/documents` | First sync directory (host path)  |
 | `SYNC_DIR_2`       | No       | `./data/photos`    | Second sync directory (host path) |
+| `PROTON_USERNAME`  | No       | -                  | Proton username for headless auth |
+| `PROTON_PASSWORD`  | No       | -                  | Proton password for headless auth |
+
+### Container Environment
+
+The container sets `DOCKER=1` automatically. This causes the dashboard to bind to `0.0.0.0` instead of `127.0.0.1`, making it accessible via the mapped port on the host. No manual configuration of `dashboard_host` is needed.
 
 ### Adding More Sync Directories
 
@@ -182,6 +200,14 @@ Common causes:
 - **Not authenticated** - Run `docker exec -it proton-drive-sync proton-drive-sync auth`
 - **No sync directories configured** - Add directories via the dashboard at http://localhost:4242
 
+### Dashboard not accessible
+
+The dashboard automatically binds to `0.0.0.0` inside the container (via the `DOCKER=1` env var), so it should be accessible at `http://localhost:4242` on the host. If you're having issues:
+
+- Ensure the port mapping is correct in `docker-compose.yml`
+- Check that no other service is using port 4242 on the host
+- Try changing `DASHBOARD_PORT` in `.env` to a different port
+
 ### Permission denied on sync directories
 
 Ensure the host directories exist and are readable/writable:
@@ -209,14 +235,11 @@ The container runs a single process that manages:
 2. **Sync Engine** - Queues and processes file changes
 3. **Dashboard** - Web UI on port 4242
 
-The app runs in foreground mode (`--no-daemon`) for proper Docker signal handling.
+The app runs in foreground mode (`--no-daemon`) for proper Docker signal handling. Signals (`SIGTERM`, `SIGINT`) are forwarded directly to the application process via `exec` in the entrypoint, enabling graceful shutdown.
 
 ## Health Check
 
-The container includes a health check that verifies:
-
-1. `proton-drive-sync status` returns successfully
-2. Dashboard is responding on port 4242
+The container includes a health check that verifies the sync process is running via `proton-drive-sync status`. The start period is 30 seconds to allow time for authentication.
 
 Check health status:
 

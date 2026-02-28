@@ -24,7 +24,6 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    wget \
     jq \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
@@ -40,12 +39,14 @@ RUN chmod +x /entrypoint.sh
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_STATE_HOME=/state
 
+# Signal to the app that it's running inside a container
+ENV DOCKER=1
+
 # Dashboard port
 EXPOSE 4242
 
-# Health check: verify both sync process and dashboard are responsive
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD proton-drive-sync status > /dev/null 2>&1 && \
-        wget -q --spider http://localhost:4242/ || exit 1
+# Health check: verify sync process is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD proton-drive-sync status > /dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

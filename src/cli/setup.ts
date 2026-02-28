@@ -11,6 +11,7 @@ import { select, confirm } from '@inquirer/prompts';
 import { existsSync } from 'fs';
 
 import { getStoredCredentials } from '../keychain.js';
+import { isFlatpak } from '../environment.js';
 import { isAlreadyRunning, isStartupReady } from '../flags.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
@@ -87,9 +88,14 @@ function openBrowser(url: string): void {
   if (process.platform === 'darwin') {
     Bun.spawn(['open', url]);
   } else if (process.platform === 'linux') {
-    const result = Bun.spawnSync(['which', 'xdg-open']);
-    if (result.exitCode === 0) {
-      Bun.spawn(['xdg-open', url]);
+    if (isFlatpak()) {
+      // Inside Flatpak, use flatpak-spawn to open browser on the host
+      Bun.spawn(['flatpak-spawn', '--host', 'xdg-open', url]);
+    } else {
+      const result = Bun.spawnSync(['which', 'xdg-open']);
+      if (result.exitCode === 0) {
+        Bun.spawn(['xdg-open', url]);
+      }
     }
   }
 }
@@ -101,7 +107,11 @@ function getLocalIp(): string {
       return new TextDecoder().decode(result.stdout).trim();
     }
   } else if (process.platform === 'linux') {
-    const result = Bun.spawnSync(['hostname', '-I']);
+    // Inside Flatpak, run hostname on the host to get the real IP
+    const command = isFlatpak()
+      ? ['flatpak-spawn', '--host', 'hostname', '-I']
+      : ['hostname', '-I'];
+    const result = Bun.spawnSync(command);
     if (result.exitCode === 0) {
       const output = new TextDecoder().decode(result.stdout).trim();
       const firstIp = output.split(' ')[0];
@@ -165,16 +175,27 @@ async function configureService(): Promise<boolean> {
   }
 
   if (process.platform === 'linux') {
+    const inFlatpak = isFlatpak();
+
+    // Inside Flatpak, system-scope services are not supported because
+    // sudo cannot be used within the sandbox.
+    const choices = inFlatpak
+      ? [
+          { name: "Don't start automatically - manual start only", value: 'none' as const },
+          { name: 'On login (user service) - runs when you log in', value: 'user' as const },
+        ]
+      : [
+          { name: "Don't start automatically - manual start only", value: 'none' as const },
+          { name: 'On login (user service) - runs when you log in', value: 'user' as const },
+          {
+            name: 'On boot (system service) - runs at system startup (requires sudo)',
+            value: 'system' as const,
+          },
+        ];
+
     const choice = await select({
       message: 'When should the sync service start?',
-      choices: [
-        { name: "Don't start automatically - manual start only", value: 'none' },
-        { name: 'On login (user service) - runs when you log in', value: 'user' },
-        {
-          name: 'On boot (system service) - runs at system startup (requires sudo)',
-          value: 'system',
-        },
-      ],
+      choices,
     });
 
     if (choice === 'none') {

@@ -10,6 +10,9 @@ services:
     environment:
       - KEYRING_PASSWORD=${KEYRING_PASSWORD}
       - TZ=${TZ:-UTC}
+      # Optional: headless authentication (does not support 2FA accounts)
+      # - PROTON_USERNAME=${PROTON_USERNAME}
+      # - PROTON_PASSWORD=${PROTON_PASSWORD}
 
     volumes:
       # Persistent config (credentials.enc, config.json)

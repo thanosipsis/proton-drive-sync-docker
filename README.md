@@ -133,17 +133,7 @@ proton-drive-sync setup
 
 </details>
 
-### Coming Soon
-
-<details>
-<summary>Windows</summary>
-
-Download the `.zip` from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest), extract, and add to your PATH.
-
-</details>
-
-<details>
-<summary>Docker</summary>
+### Docker
 
 See **[DOCKER_SETUP.md](DOCKER_SETUP.md)** for running with Docker Compose on Linux x86_64 and ARM64.
 
@@ -154,6 +144,13 @@ cp .env.example .env
 docker compose up -d
 docker exec -it proton-drive-sync proton-drive-sync auth
 ```
+
+### Coming Soon
+
+<details>
+<summary>Windows</summary>
+
+Download the `.zip` from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest), extract, and add to your PATH.
 
 </details>
 
