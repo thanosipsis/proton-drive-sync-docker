@@ -1,269 +1,102 @@
-<p align="center">
-  <img src="readme_assets/banner.png" alt="Proton Drive Sync" />
-</p>
+# Proton Drive Sync Docker Stack
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/bf1fccac-9a08-4da1-bc0c-2c06d510fbf1"/>
-</p>
+Docker stack for running `proton-drive-sync` against a local Kopia repository.
 
-<a href="https://www.buymeacoffee.com/thebitflipper" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50">
-</a>
+This wrapper keeps Proton credentials and sync state in local persistent volumes, and builds from the local `./source` checkout.
 
-## Installation
+## Prerequisites
 
-### macOS
+- Docker Engine + Docker Compose plugin
+- A Proton account
+- A local Kopia repository on the host
 
-```bash
-brew tap DamianB-BitFlipper/tap
-brew update
-brew install proton-drive-sync
+## Install (Docker)
 
-proton-drive-sync setup
-```
+1. Go to this stack directory:
+   - `cd /home/thano/srv/docker/proton-drive-sync`
+2. Create `.env` from the template:
+   - `cp .env.example .env`
+3. Set `KEYRING_PASSWORD` in `.env`:
+   - `openssl rand -base64 32`
+4. Confirm `SYNC_DIR_KOPIA` in `.env` points to your host Kopia repository path.
+5. Build image:
+   - `docker compose build proton-drive-sync`
+6. Authenticate once:
+   - `docker compose run --rm --entrypoint proton-drive-sync proton-drive-sync auth`
+7. Start service:
+   - `docker compose up -d proton-drive-sync`
+8. Open dashboard:
+   - `http://<server-ip>:4242`
 
-### Linux
+## Initial Dashboard Setup
 
-#### Debian / Ubuntu
+Add one sync mapping:
 
-```bash
-# Add repository
-echo "deb [trusted=yes] https://repo.damianb.dev/apt/ * *" | sudo tee /etc/apt/sources.list.d/proton-drive-sync.list
-sudo apt update
+- Local path: `/data/kopia-repository`
+- Remote root: your Proton destination (example: `/Backups/Kopia`)
 
-# Install
-sudo apt install proton-drive-sync
+## Changes In This Fork (vs upstream main)
 
-proton-drive-sync setup
-```
+- Docker-first deployment wrapper with compose/env and persistent state volumes.
+- Local source image build (`./source`) instead of relying on external prebuilt image availability.
+- Job execution timeout to prevent hung worker operations.
+- Recovery of stale in-memory active task slots after timeout.
+- Periodic blocked-job recovery pass in the sync loop.
+- Auto-requeue for blocked jobs caused by `Invalid access token` (with cooldown).
+- Idempotent handling for create-file conflicts:
+  - `A file or folder with that name already exists` is treated as synced instead of endlessly retried.
+- Run-lock hardening for container restart PID reuse:
+  - stale `running_pid` self-lock is auto-cleared.
+- Docker runtime hardening in compose (`no-new-privileges`, `pids_limit`, controlled stop grace period).
 
-#### Fedora / RHEL / CentOS
+## Authentication Notes
 
-```bash
-# Add repository
-sudo tee /etc/yum.repos.d/proton-drive-sync.repo << 'EOF'
-[proton-drive-sync]
-name=Proton Drive Sync
-baseurl=https://repo.damianb.dev/yum/
-enabled=1
-gpgcheck=0
-EOF
+During `auth`, you may see:
 
-# Install
-sudo dnf install proton-drive-sync
+- `Failed to fork child session: Cannot fork child session`
+- `Falling back to parent session: ...`
 
-proton-drive-sync setup
-```
+This can be non-fatal if startup logs later show successful auth.
 
-<details>
-<summary>Homebrew (Linux)</summary>
+Check:
 
-```bash
-brew tap DamianB-BitFlipper/tap
-brew update
-brew install proton-drive-sync
+- `docker compose logs --tail=80 proton-drive-sync`
+- Look for: `Authenticated as <user>`
 
-proton-drive-sync setup
-```
+If startup still fails with `Invalid access token`:
 
-</details>
+1. Re-run auth:
+   - `docker compose run --rm --entrypoint proton-drive-sync proton-drive-sync auth`
+2. Start again:
+   - `docker compose up -d proton-drive-sync`
 
-<details>
-<summary>Arch Linux (AUR)</summary>
+## Operations
 
-Install from the [AUR package](https://aur.archlinux.org/packages/proton-drive-sync-bin):
+- Status:
+  - `docker compose ps`
+  - `curl -s http://127.0.0.1:4242/api/stats`
+- Logs:
+  - `docker compose logs -f proton-drive-sync`
+- Restart:
+  - `docker compose restart proton-drive-sync`
+- Rebuild + restart:
+  - `docker compose up -d --build proton-drive-sync`
+- Stop:
+  - `docker compose stop proton-drive-sync`
 
-```bash
-# Install via yay
-yay -S proton-drive-sync-bin
+## Troubleshooting
 
-# Install via paru
-paru -S proton-drive-sync-bin
-```
+If queue health is bad (`blocked > 0`, `processing` stuck, or retries never drain):
 
-</details>
+1. Rebuild and restart:
+   - `docker compose up -d --build proton-drive-sync`
+2. Check stats:
+   - `curl -s http://127.0.0.1:4242/api/stats`
+3. Check logs for auth or conflict errors:
+   - `docker compose logs --tail=200 proton-drive-sync`
 
-<details>
-<summary>AppImage</summary>
+## Security
 
-Download the AppImage from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
-
-```bash
-# Download (replace VERSION and ARCH as needed)
-wget https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest/download/Proton_Drive_Sync-VERSION-x86_64.AppImage
-
-# Make executable and run
-chmod +x Proton_Drive_Sync-*.AppImage
-./Proton_Drive_Sync-*.AppImage setup
-
-# Optionally move to PATH
-sudo mv Proton_Drive_Sync-*.AppImage /usr/local/bin/proton-drive-sync
-```
-
-</details>
-
-<details>
-<summary>Flatpak</summary>
-
-Download the Flatpak bundle from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
-
-```bash
-# Download (replace VERSION and ARCH as needed)
-wget https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest/download/Proton_Drive_Sync-VERSION-x86_64.flatpak
-
-# Install
-flatpak install --user Proton_Drive_Sync-*.flatpak
-
-# Run
-flatpak run io.github.damianbbitflipper.ProtonDriveSync setup
-```
-
-</details>
-
-<details>
-<summary>Tarball (manual)</summary>
-
-Download the Linux tarball from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
-
-```bash
-tar -xzf proton-drive-sync-linux-x64.tar.gz
-sudo mv proton-drive-sync /usr/local/bin/
-proton-drive-sync setup
-```
-
-</details>
-
-### Docker
-
-See **[DOCKER_SETUP.md](DOCKER_SETUP.md)** for running with Docker Compose on Linux x86_64 and ARM64.
-
-```bash
-cd docker/
-cp .env.example .env
-# Edit .env with KEYRING_PASSWORD and sync directory paths
-docker compose up -d
-docker exec -it proton-drive-sync proton-drive-sync auth
-```
-
-### Coming Soon
-
-<details>
-<summary>Windows</summary>
-
-Download the `.zip` from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest), extract, and add to your PATH.
-
-</details>
-
-### Installing Pre-release Versions
-
-<details>
-<summary>Pre-release packages</summary>
-
-Pre-release packages (`proton-drive-sync-prerelease`) allow you to test upcoming features before stable release. They conflict with the stable package, so only one can be installed at a time.
-
-#### macOS
-
-```bash
-brew tap DamianB-BitFlipper/tap
-brew install proton-drive-sync-prerelease
-```
-
-#### Debian / Ubuntu
-
-```bash
-# Add repository (if not already added)
-echo "deb [trusted=yes] https://repo.damianb.dev/apt/ * *" | sudo tee /etc/apt/sources.list.d/proton-drive-sync.list
-sudo apt update
-
-# Install prerelease
-sudo apt install proton-drive-sync-prerelease
-```
-
-#### Fedora / RHEL / CentOS
-
-```bash
-# Add repository (if not already added)
-sudo tee /etc/yum.repos.d/proton-drive-sync.repo << 'EOF'
-[proton-drive-sync]
-name=Proton Drive Sync
-baseurl=https://repo.damianb.dev/yum/
-enabled=1
-gpgcheck=0
-EOF
-
-# Install prerelease
-sudo dnf install proton-drive-sync-prerelease
-```
-
-#### Arch Linux (AUR)
-
-On Arch Linux and derivatives, install from the [AUR package](https://aur.archlinux.org/packages/proton-drive-sync-prerelease-bin):
-
-```bash
-# Install via yay
-yay -S proton-drive-sync-prerelease-bin
-
-# Install via paru
-paru -S proton-drive-sync-prerelease-bin
-```
-
-#### Manual Installation
-
-Download the pre-release tarball for your platform from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases) and extract it:
-
-```bash
-# Example for macOS arm64
-tar -xzf proton-drive-sync-darwin-arm64.tar.gz
-sudo mv proton-drive-sync /usr/local/bin/
-```
-
-#### Switching Between Stable and Pre-release
-
-The packages conflict with each other, so installing one will automatically remove the other:
-
-```bash
-# Switch to prerelease
-sudo apt install proton-drive-sync-prerelease
-
-# Switch back to stable
-sudo apt install proton-drive-sync
-```
-
-</details>
-
-## Usage
-
-### Dashboard
-
-The dashboard runs locally at http://localhost:4242. Use it to configure and manage the sync client.
-
-### Commands
-
-| Command                    | Description                                          |
-| -------------------------- | ---------------------------------------------------- |
-| `proton-drive-sync setup`  | Interactive setup wizard (recommended for first run) |
-| `proton-drive-sync auth`   | Authenticate with Proton                             |
-| `proton-drive-sync start`  | Start the sync daemon                                |
-| `proton-drive-sync stop`   | Stop the sync daemon                                 |
-| `proton-drive-sync status` | Show sync status                                     |
-| `proton-drive-sync --help` | Show all available commands                          |
-
-### Uninstall
-
-To completely remove proton-drive-sync and all its data:
-
-```bash
-proton-drive-sync reset --purge
-```
-
-This will stop the service, remove credentials, and delete all configuration and sync history.
-
-For package managers:
-
-- **Homebrew**: `brew uninstall proton-drive-sync`
-- **Debian/Ubuntu**: `sudo apt remove proton-drive-sync`
-- **Fedora/RHEL**: `sudo dnf remove proton-drive-sync`
-
-## Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for development setup and contributing guidelines.
+- Do not commit `.env` or `data/` directories.
+- `data/config` contains encrypted credentials and config.
+- `data/state` contains sync state and internal SQLite metadata.
