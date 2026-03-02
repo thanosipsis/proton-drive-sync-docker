@@ -13,7 +13,7 @@ This wrapper keeps Proton credentials and sync state in local persistent volumes
 ## Install (Docker)
 
 1. Go to this stack directory:
-   - `cd /home/thano/srv/docker/proton-drive-sync`
+   - `cd /path/to/proton-drive-sync`
 2. Create `.env` from the template:
    - `cp .env.example .env`
 3. Set `KEYRING_PASSWORD` in `.env`:
