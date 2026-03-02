@@ -832,6 +832,29 @@ export class ProtonAuth {
   private pendingAuthResponse: AuthResponse | null = null;
 
   /**
+   * Fallback for environments/accounts where child session forking is unavailable.
+   * Uses the parent session as the active working session.
+   */
+  private fallbackToParentSession(reason: string): Session {
+    if (!this.parentSession) {
+      throw new Error(reason);
+    }
+
+    logger.warn(`Falling back to parent session: ${reason}`);
+    this.session = {
+      ...this.parentSession,
+      keyPassword: this.parentSession.keyPassword ?? this.session?.keyPassword,
+      UserID: this.parentSession.UserID ?? this.session?.UserID,
+      user: this.parentSession.user ?? this.session?.user,
+      primaryKey: this.parentSession.primaryKey ?? this.session?.primaryKey,
+      addresses: this.parentSession.addresses ?? this.session?.addresses,
+      passwordMode: this.parentSession.passwordMode ?? this.session?.passwordMode,
+    };
+
+    return this.session;
+  }
+
+  /**
    * Make an API request with automatic token refresh on 401
    */
   private async apiRequestWithRefresh<T extends ApiResponse>(
@@ -1005,6 +1028,7 @@ export class ProtonAuth {
 
       // Store keyPassword in parent session for fork payload encryption
       this.parentSession.keyPassword = this.session.keyPassword;
+      this.parentSession.UserID = this.session.UserID;
       this.parentSession.user = this.session.user;
       this.parentSession.primaryKey = this.session.primaryKey;
       this.parentSession.addresses = this.session.addresses;
@@ -1153,6 +1177,7 @@ export class ProtonAuth {
       this.session
     );
     this.session.user = userResponse.User;
+    this.session.UserID = this.session.UserID || userResponse.User?.ID;
 
     // Fetch key salts
     const saltsResponse = await apiRequest<ApiResponse & { KeySalts?: KeySalt[] }>(
@@ -1416,6 +1441,12 @@ export class ProtonAuth {
       logger.info('Successfully forked new child session from parent');
       return this.session!;
     } catch (error) {
+      if (this.parentSession?.AccessToken && this.parentSession?.RefreshToken) {
+        return this.fallbackToParentSession(
+          `Fork recovery failed (${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+
       // If parent refresh or forking fails, user needs to re-authenticate
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -1618,6 +1649,10 @@ export class ProtonAuth {
       // Clear parent session if it's expired
       if (message.includes('Parent session expired') || message.includes('INVALID_REFRESH_TOKEN')) {
         this.parentSession = null;
+      }
+
+      if (this.parentSession) {
+        return this.fallbackToParentSession(message);
       }
 
       throw error;

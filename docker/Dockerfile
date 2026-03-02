@@ -13,7 +13,7 @@ RUN bun install --frozen-lockfile
 
 # Copy source and build
 COPY . .
-RUN bun run build:css && bun run build:bin
+RUN bun run build:bin
 
 # =============================================================================
 # Stage 2: Runtime
@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     jq \
     libssl3 \
+    libsecret-1-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built binary from builder stage

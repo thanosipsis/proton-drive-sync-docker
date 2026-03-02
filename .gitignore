@@ -3,5 +3,8 @@ dist/
 .DS_Store
 *.log
 *.bun-build
+.env
+**/.env
+**/data/
 
 my_*
