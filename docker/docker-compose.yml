@@ -1,39 +1,23 @@
+name: proton-drive-sync
+
 services:
   proton-drive-sync:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ghcr.io/damianb-bitflipper/proton-drive-sync:latest
+    image: proton-drive-sync:local
     container_name: proton-drive-sync
     restart: unless-stopped
-
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
     environment:
-      - KEYRING_PASSWORD=${KEYRING_PASSWORD}
-      - TZ=${TZ:-UTC}
-      # Optional: headless authentication (does not support 2FA accounts)
-      # - PROTON_USERNAME=${PROTON_USERNAME}
-      # - PROTON_PASSWORD=${PROTON_PASSWORD}
-
-    volumes:
-      # Persistent config (credentials.enc, config.json)
-      - config:/config/proton-drive-sync
-      # Persistent state (state.db, sync.log)
-      - state:/state/proton-drive-sync
-      # Sync directories - customize these paths
-      - ${SYNC_DIR_1:-./data/documents}:/data/documents
-      - ${SYNC_DIR_2:-./data/photos}:/data/photos
-
+      KEYRING_PASSWORD: ${KEYRING_PASSWORD}
+      TZ: ${TZ:-UTC}
     ports:
-      - '${DASHBOARD_PORT:-4242}:4242'
-
-    # Required for fs.watch inotify file watching
-    sysctls:
-      - fs.inotify.max_user_watches=524288
-      - fs.inotify.max_user_instances=512
-
-    # Allow graceful shutdown
+      - "${DASHBOARD_PORT:-4242}:4242"
+    volumes:
+      - ./data/config:/config/proton-drive-sync
+      - ./data/state:/state/proton-drive-sync
+      - ${SYNC_DIR_KOPIA:-./data/kopia-repository}:/data/kopia-repository
     stop_grace_period: 30s
-
-volumes:
-  config:
-  state:
