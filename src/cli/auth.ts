@@ -140,8 +140,9 @@ export async function createClientFromTokens(
   credentials: StoredCredentials,
   sdkDebug: boolean = false
 ): Promise<ProtonDriveClient> {
-  // Force re-auth for old credentials without passwordMode
-  if (credentials.passwordMode === undefined) {
+  // Force re-auth for old credentials format (parent/child session model or missing passwordMode)
+  const creds = credentials as unknown as Record<string, unknown>;
+  if (credentials.passwordMode === undefined || creds['parentUID'] || creds['childUID']) {
     throw new Error(
       'Stored credentials are outdated. Please re-authenticate with: proton-drive-sync auth'
     );
