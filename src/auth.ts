@@ -145,47 +145,17 @@ interface AuthResponse extends ApiResponse {
 }
 
 interface ReusableCredentials {
-  // Parent session (from initial login) - used for forking new child sessions
-  parentUID: string;
-  parentAccessToken: string;
-  parentRefreshToken: string;
+  // Session tokens
+  UID: string;
+  AccessToken: string;
+  RefreshToken: string;
 
-  // Child session (for API operations) - this is the active working session
-  childUID: string;
-  childAccessToken: string;
-  childRefreshToken: string;
-
-  // Shared credentials
+  // Credentials
   SaltedKeyPass: string;
   UserID: string;
 
   // Password mode: 1 = Single, 2 = Two-password mode
   passwordMode: PasswordMode;
-}
-
-// ============================================================================
-// Session Forking Types
-// ============================================================================
-
-interface ForkEncryptedBlob {
-  type: 'default';
-  keyPassword: string;
-}
-
-interface PushForkResponse extends ApiResponse {
-  Selector: string;
-}
-
-interface PullForkResponse extends ApiResponse {
-  UID: string;
-  AccessToken: string;
-  RefreshToken: string;
-  ExpiresIn: number;
-  TokenType: string;
-  UserID: string;
-  Scopes: string[];
-  LocalID: number;
-  Payload: string;
 }
 
 // Error code for invalid/expired refresh token
@@ -200,7 +170,6 @@ const SRP_LEN = 256; // 2048 / 8, in bytes
 const AUTH_VERSION = 4;
 const BCRYPT_PREFIX = '$2y$10$';
 const APP_VERSION = 'external-drive-proton_drive_sync@1.0.0';
-const CHILD_CLIENT_ID = 'ExternalDrive';
 
 // SRP Modulus verification key
 const SRP_MODULUS_KEY = `-----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -373,126 +342,6 @@ function mergeUint8Arrays(arrays: Uint8Array[]): Uint8Array {
     offset += arr.length;
   }
   return result;
-}
-
-// ============================================================================
-// AES-GCM Encryption for Session Forking
-// ============================================================================
-
-const FORK_PAYLOAD_IV_LENGTH = 16; // Proton uses non-standard 16-byte IV
-const FORK_PAYLOAD_KEY_LENGTH = 32; // AES-256
-const FORK_PAYLOAD_AAD = 'fork'; // Additional authenticated data for v2
-
-/**
- * Import raw bytes as AES-GCM key
- */
-async function importAesGcmKey(rawKey: Uint8Array): Promise<CryptoKey> {
-  // Create a new ArrayBuffer copy to satisfy TypeScript's strict typing
-  const keyBuffer = new Uint8Array(rawKey).buffer as ArrayBuffer;
-  return crypto.subtle.importKey('raw', keyBuffer, { name: 'AES-GCM' }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
-}
-
-/**
- * Encrypt fork payload using AES-256-GCM with 16-byte IV
- * Matches Proton's encryptDataWith16ByteIV format
- */
-async function encryptForkPayload(
-  key: CryptoKey,
-  data: string,
-  additionalData?: Uint8Array
-): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(FORK_PAYLOAD_IV_LENGTH));
-  const encodedData = stringToUint8Array(data);
-
-  // Create new ArrayBuffer copies to satisfy TypeScript's strict typing
-  const ivBuffer = new Uint8Array(iv);
-  const dataBuffer = new Uint8Array(encodedData);
-  const aadBuffer = additionalData ? new Uint8Array(additionalData) : undefined;
-
-  const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv: ivBuffer,
-      ...(aadBuffer !== undefined ? { additionalData: aadBuffer } : {}),
-    },
-    key,
-    dataBuffer
-  );
-
-  // Format: [16-byte IV][ciphertext + auth tag]
-  const result = mergeUint8Arrays([iv, new Uint8Array(ciphertext)]);
-  return base64Encode(result);
-}
-
-/**
- * Decrypt fork payload using AES-256-GCM with 16-byte IV
- */
-async function decryptForkPayload(
-  key: CryptoKey,
-  blob: string,
-  additionalData?: Uint8Array
-): Promise<string> {
-  const data = base64Decode(blob);
-
-  // Extract IV (first 16 bytes) and ciphertext
-  const iv = data.slice(0, FORK_PAYLOAD_IV_LENGTH);
-  const ciphertext = data.slice(FORK_PAYLOAD_IV_LENGTH);
-
-  // Create new ArrayBuffer copies to satisfy TypeScript's strict typing
-  const ivBuffer = new Uint8Array(iv);
-  const ciphertextBuffer = new Uint8Array(ciphertext);
-  const aadBuffer = additionalData ? new Uint8Array(additionalData) : undefined;
-
-  const decrypted = await crypto.subtle.decrypt(
-    {
-      name: 'AES-GCM',
-      iv: ivBuffer,
-      ...(aadBuffer !== undefined ? { additionalData: aadBuffer } : {}),
-    },
-    key,
-    ciphertextBuffer
-  );
-
-  return new TextDecoder().decode(decrypted);
-}
-
-/**
- * Create encrypted fork blob containing keyPassword
- */
-async function createForkEncryptedBlob(
-  keyPassword: string
-): Promise<{ key: Uint8Array; blob: string }> {
-  // Generate random 32-byte key
-  const rawKey = crypto.getRandomValues(new Uint8Array(FORK_PAYLOAD_KEY_LENGTH));
-  const cryptoKey = await importAesGcmKey(rawKey);
-
-  // Create payload matching Proton's ForkEncryptedBlob format
-  const payload: ForkEncryptedBlob = {
-    type: 'default',
-    keyPassword,
-  };
-
-  // Encrypt with AAD for payload version 2
-  const aad = stringToUint8Array(FORK_PAYLOAD_AAD);
-  const blob = await encryptForkPayload(cryptoKey, JSON.stringify(payload), aad);
-
-  return { key: rawKey, blob };
-}
-
-/**
- * Decrypt fork blob to extract keyPassword
- */
-async function decryptForkEncryptedBlob(key: Uint8Array, blob: string): Promise<string> {
-  const cryptoKey = await importAesGcmKey(key);
-  const aad = stringToUint8Array(FORK_PAYLOAD_AAD);
-
-  const decrypted = await decryptForkPayload(cryptoKey, blob, aad);
-  const payload: ForkEncryptedBlob = JSON.parse(decrypted);
-
-  return payload.keyPassword;
 }
 
 // ============================================================================
@@ -828,31 +677,9 @@ async function apiRequest<T extends ApiResponse>(
  */
 export class ProtonAuth {
   private session: Session | null = null;
-  private parentSession: Session | null = null;
   private pendingAuthResponse: AuthResponse | null = null;
-
-  /**
-   * Fallback for environments/accounts where child session forking is unavailable.
-   * Uses the parent session as the active working session.
-   */
-  private fallbackToParentSession(reason: string): Session {
-    if (!this.parentSession) {
-      throw new Error(reason);
-    }
-
-    logger.warn(`Falling back to parent session: ${reason}`);
-    this.session = {
-      ...this.parentSession,
-      keyPassword: this.parentSession.keyPassword ?? this.session?.keyPassword,
-      UserID: this.parentSession.UserID ?? this.session?.UserID,
-      user: this.parentSession.user ?? this.session?.user,
-      primaryKey: this.parentSession.primaryKey ?? this.session?.primaryKey,
-      addresses: this.parentSession.addresses ?? this.session?.addresses,
-      passwordMode: this.parentSession.passwordMode ?? this.session?.passwordMode,
-    };
-
-    return this.session;
-  }
+  /** Singleton promise to prevent concurrent refresh calls from invalidating tokens */
+  private refreshPromise: Promise<Session> | null = null;
 
   /**
    * Make an API request with automatic token refresh on 401
@@ -926,6 +753,7 @@ export class ProtonAuth {
         UID: authResponse.UID,
         AccessToken: authResponse.AccessToken,
         RefreshToken: authResponse.RefreshToken,
+        UserID: authResponse.UserID,
         passwordMode: (authResponse.PasswordMode ?? 1) as PasswordMode,
       };
 
@@ -941,7 +769,7 @@ export class ProtonAuth {
     const passwordMode = (authResponse.PasswordMode ?? 1) as PasswordMode;
     if (passwordMode === 2) {
       // Two-password mode - need separate mailbox password for key decryption
-      this.parentSession = {
+      this.session = {
         UID: authResponse.UID,
         AccessToken: authResponse.AccessToken,
         RefreshToken: authResponse.RefreshToken,
@@ -949,15 +777,14 @@ export class ProtonAuth {
         Scope: authResponse.Scope,
         passwordMode: 2,
       };
-      this.session = { ...this.parentSession };
 
       const error = new Error('Mailbox password required') as ApiError;
       error.requiresMailboxPassword = true;
       throw error;
     }
 
-    // Store as parent session first (single password mode)
-    this.parentSession = {
+    // Single password mode - set up the session
+    this.session = {
       UID: authResponse.UID,
       AccessToken: authResponse.AccessToken,
       RefreshToken: authResponse.RefreshToken,
@@ -966,19 +793,8 @@ export class ProtonAuth {
       passwordMode: 1,
     };
 
-    // Fetch user data and keys using parent session temporarily
-    this.session = this.parentSession;
+    // Fetch user data and keys
     await this._fetchUserAndKeys(password);
-
-    // Store keyPassword in parent session for fork payload encryption
-    this.parentSession.keyPassword = this.session.keyPassword;
-    this.parentSession.user = this.session.user;
-    this.parentSession.primaryKey = this.session.primaryKey;
-    this.parentSession.addresses = this.session.addresses;
-
-    // Fork a child session for API operations
-    logger.info('Forking child session from parent...');
-    await this.forkNewChildSession();
 
     return this.session;
   }
@@ -1003,16 +819,6 @@ export class ProtonAuth {
       this.session.RefreshToken = response.RefreshToken;
     }
 
-    // Store as parent session
-    this.parentSession = {
-      UID: this.session.UID,
-      AccessToken: this.session.AccessToken,
-      RefreshToken: this.session.RefreshToken,
-      UserID: this.session.UserID,
-      Scope: this.session.Scope,
-      passwordMode: this.session.passwordMode,
-    };
-
     // Check if this is a two-password mode account
     if (this.session.passwordMode === 2) {
       // Still need mailbox password - throw to let caller handle
@@ -1025,17 +831,6 @@ export class ProtonAuth {
     // Single password mode - use stored login password for key decryption
     if (this.session.password) {
       await this._fetchUserAndKeys(this.session.password);
-
-      // Store keyPassword in parent session for fork payload encryption
-      this.parentSession.keyPassword = this.session.keyPassword;
-      this.parentSession.UserID = this.session.UserID;
-      this.parentSession.user = this.session.user;
-      this.parentSession.primaryKey = this.session.primaryKey;
-      this.parentSession.addresses = this.session.addresses;
-
-      // Fork a child session for API operations
-      logger.info('Forking child session from parent...');
-      await this.forkNewChildSession();
     }
 
     return this.session;
@@ -1054,16 +849,6 @@ export class ProtonAuth {
 
     // Use MAILBOX password (not login password) for key decryption
     await this._fetchUserAndKeys(mailboxPassword);
-
-    // Update parent session with key data
-    this.parentSession!.keyPassword = this.session.keyPassword;
-    this.parentSession!.user = this.session.user;
-    this.parentSession!.primaryKey = this.session.primaryKey;
-    this.parentSession!.addresses = this.session.addresses;
-
-    // Fork a child session for API operations
-    logger.info('Forking child session from parent...');
-    await this.forkNewChildSession();
 
     return this.session;
   }
@@ -1177,7 +962,7 @@ export class ProtonAuth {
       this.session
     );
     this.session.user = userResponse.User;
-    this.session.UserID = this.session.UserID || userResponse.User?.ID;
+    this.session.UserID = userResponse.User.ID;
 
     // Fetch key salts
     const saltsResponse = await apiRequest<ApiResponse & { KeySalts?: KeySalt[] }>(
@@ -1244,7 +1029,7 @@ export class ProtonAuth {
    * Get credentials for session reuse (like rclone stores)
    */
   getReusableCredentials(): ReusableCredentials {
-    if (!this.session || !this.parentSession) {
+    if (!this.session) {
       throw new Error('Not authenticated');
     }
     if (!this.session.keyPassword) {
@@ -1254,12 +1039,9 @@ export class ProtonAuth {
       throw new Error('No user ID available - authentication incomplete');
     }
     return {
-      parentUID: this.parentSession.UID,
-      parentAccessToken: this.parentSession.AccessToken,
-      parentRefreshToken: this.parentSession.RefreshToken,
-      childUID: this.session.UID,
-      childAccessToken: this.session.AccessToken,
-      childRefreshToken: this.session.RefreshToken,
+      UID: this.session.UID,
+      AccessToken: this.session.AccessToken,
+      RefreshToken: this.session.RefreshToken,
       SaltedKeyPass: this.session.keyPassword,
       UserID: this.session.UserID,
       passwordMode: this.session.passwordMode ?? 1,
@@ -1270,32 +1052,13 @@ export class ProtonAuth {
    * Restore session from stored credentials
    */
   async restoreSession(credentials: ReusableCredentials): Promise<Session> {
-    const {
-      parentUID,
-      parentAccessToken,
-      parentRefreshToken,
-      childUID,
-      childAccessToken,
-      childRefreshToken,
-      SaltedKeyPass,
-    } = credentials;
+    const { UID, AccessToken, RefreshToken, SaltedKeyPass } = credentials;
 
-    // Restore parent session
-    this.parentSession = {
-      UID: parentUID,
-      AccessToken: parentAccessToken,
-      RefreshToken: parentRefreshToken,
-      UserID: credentials.UserID,
-      keyPassword: SaltedKeyPass,
-      passwordMode: credentials.passwordMode,
-    };
-
-    // Restore child session (the active working session)
+    // Restore session
     this.session = {
-      UID: childUID,
-      AccessToken: childAccessToken,
-      RefreshToken: childRefreshToken,
-      UserID: credentials.UserID,
+      UID,
+      AccessToken,
+      RefreshToken,
       keyPassword: SaltedKeyPass,
       passwordMode: credentials.passwordMode,
     };
@@ -1308,8 +1071,7 @@ export class ProtonAuth {
         'core/v4/users'
       );
       this.session.user = userResponse.User;
-      this.session.UserID = this.session.UserID || userResponse.User?.ID;
-      this.parentSession.UserID = this.parentSession.UserID || this.session.UserID;
+      this.session.UserID = userResponse.User.ID;
 
       // First, decrypt the user's primary key
       const primaryUserKey = this.session.user?.Keys?.[0];
@@ -1400,10 +1162,28 @@ export class ProtonAuth {
   }
 
   /**
-   * Refresh the access token (child session)
-   * If refresh fails with invalid refresh token error, attempts to fork a new child session from parent
+   * Refresh the access token using singleton pattern to prevent race conditions.
+   * Multiple concurrent callers will share the same in-flight refresh request.
+   * Both access and refresh tokens are updated on each refresh (Proton requirement).
    */
   async refreshToken(): Promise<Session> {
+    // Singleton: if a refresh is already in progress, return the same promise
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this._doRefresh();
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  /**
+   * Internal refresh implementation - called only by refreshToken() singleton
+   */
+  private async _doRefresh(): Promise<Session> {
     if (!this.session?.RefreshToken) {
       throw new Error('No refresh token available');
     }
@@ -1414,69 +1194,10 @@ export class ProtonAuth {
       this.session.RefreshToken = tokens.refreshToken;
       return this.session;
     } catch (error) {
-      // Check if this is an invalid refresh token error
       if (this.isInvalidRefreshTokenError(error)) {
-        logger.info(
-          'Child session refresh token expired, attempting to fork new session from parent...'
+        throw new Error(
+          'Refresh token expired. Please re-authenticate with: proton-drive-sync auth'
         );
-        return await this.attemptForkRecovery();
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Attempt to recover from an expired child session by forking a new one from the parent
-   */
-  private async attemptForkRecovery(): Promise<Session> {
-    if (!this.parentSession?.RefreshToken || !this.parentSession?.keyPassword) {
-      throw new Error(
-        'Parent session not available. Please re-authenticate with: proton-drive-sync auth'
-      );
-    }
-
-    try {
-      // First, try to refresh the parent session
-      await this.refreshParentToken();
-
-      // Fork a new child session from the refreshed parent
-      await this.forkNewChildSession();
-
-      logger.info('Successfully forked new child session from parent');
-      return this.session!;
-    } catch (error) {
-      if (this.parentSession?.AccessToken && this.parentSession?.RefreshToken) {
-        return this.fallbackToParentSession(
-          `Fork recovery failed (${error instanceof Error ? error.message : String(error)})`
-        );
-      }
-
-      // If parent refresh or forking fails, user needs to re-authenticate
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Failed to recover session: ${errorMessage}. Please re-authenticate with: proton-drive-sync auth`
-      );
-    }
-  }
-
-  /**
-   * Refresh the parent session's access token
-   */
-  private async refreshParentToken(): Promise<void> {
-    if (!this.parentSession?.RefreshToken) {
-      throw new Error('No parent refresh token available');
-    }
-
-    try {
-      const tokens = await this._refreshSessionTokens(
-        this.parentSession.UID,
-        this.parentSession.RefreshToken
-      );
-      this.parentSession.AccessToken = tokens.accessToken;
-      this.parentSession.RefreshToken = tokens.refreshToken;
-    } catch (error) {
-      if (this.isInvalidRefreshTokenError(error)) {
-        throw new Error('Parent session expired. Please re-authenticate.');
       }
       throw error;
     }
@@ -1498,185 +1219,6 @@ export class ProtonAuth {
       );
     }
     return false;
-  }
-
-  /**
-   * Push a fork session request to create a child session
-   * Uses the parent session credentials to create a new fork
-   */
-  private async pushForkSession(
-    parentSession: Session
-  ): Promise<{ selector: string; encryptionKey: Uint8Array }> {
-    if (!parentSession.keyPassword) {
-      throw new Error('Parent session missing keyPassword for fork payload');
-    }
-
-    // Encrypt the keyPassword for the fork payload
-    const { key: encryptionKey, blob: encryptedPayload } = await createForkEncryptedBlob(
-      parentSession.keyPassword
-    );
-
-    const response = await fetch(`${API_BASE_URL}/auth/v4/sessions/forks`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-pm-appversion': APP_VERSION,
-        'x-pm-uid': parentSession.UID,
-        Authorization: `Bearer ${parentSession.AccessToken}`,
-      },
-      body: JSON.stringify({
-        Payload: encryptedPayload,
-        ChildClientID: CHILD_CLIENT_ID,
-        Independent: 0, // Dependent child session (matches macOS client)
-      }),
-    });
-
-    const json = (await response.json()) as ApiResponse & PushForkResponse;
-
-    if (!response.ok || json.Code !== 1000) {
-      throw new Error(json.Error || 'Failed to push fork session');
-    }
-
-    if (!json.Selector) {
-      throw new Error('Fork response missing Selector');
-    }
-
-    return { selector: json.Selector, encryptionKey };
-  }
-
-  /**
-   * Pull a fork session to obtain child session credentials
-   */
-  private async pullForkSession(
-    selector: string,
-    encryptionKey: Uint8Array,
-    parentSession: Session
-  ): Promise<{
-    UID: string;
-    AccessToken: string;
-    RefreshToken: string;
-    UserID: string;
-    keyPassword: string;
-  }> {
-    const response = await fetch(`${API_BASE_URL}/auth/v4/sessions/forks/${selector}`, {
-      method: 'GET',
-      headers: {
-        'x-pm-appversion': APP_VERSION,
-        'x-pm-uid': parentSession.UID,
-        Authorization: `Bearer ${parentSession.AccessToken}`,
-      },
-    });
-
-    const json = (await response.json()) as ApiResponse & PullForkResponse;
-
-    if (!response.ok || json.Code !== 1000) {
-      throw new Error(json.Error || 'Failed to pull fork session');
-    }
-
-    if (!json.UID || !json.AccessToken || !json.RefreshToken) {
-      throw new Error('Fork response missing required session data');
-    }
-
-    // Decrypt the keyPassword from the payload
-    let keyPassword: string;
-    if (json.Payload) {
-      keyPassword = await decryptForkEncryptedBlob(encryptionKey, json.Payload);
-    } else {
-      // Fallback to parent's keyPassword if no payload
-      if (!parentSession.keyPassword) {
-        throw new Error('No keyPassword available from fork or parent');
-      }
-      keyPassword = parentSession.keyPassword;
-    }
-
-    return {
-      UID: json.UID,
-      AccessToken: json.AccessToken,
-      RefreshToken: json.RefreshToken,
-      UserID: json.UserID,
-      keyPassword,
-    };
-  }
-
-  /**
-   * Fork a new child session from the parent session
-   * This is used to recover when the child session's refresh token expires
-   */
-  async forkNewChildSession(): Promise<Session> {
-    if (!this.parentSession) {
-      throw new Error('No parent session available - re-authentication required');
-    }
-
-    logger.info('Forking new child session from parent session');
-
-    try {
-      // First, try to refresh the parent session to ensure it's still valid
-      try {
-        const tokens = await this._refreshSessionTokens(
-          this.parentSession.UID,
-          this.parentSession.RefreshToken
-        );
-        this.parentSession.AccessToken = tokens.accessToken;
-        this.parentSession.RefreshToken = tokens.refreshToken;
-      } catch (error) {
-        // Parent session is also expired - need full re-auth
-        if (this.isInvalidRefreshTokenError(error)) {
-          throw new Error('Parent session expired - re-authentication required');
-        }
-        throw error;
-      }
-
-      // Push fork request using parent session
-      const { selector, encryptionKey } = await this.pushForkSession(this.parentSession);
-
-      // Pull the new child session
-      const childSession = await this.pullForkSession(selector, encryptionKey, this.parentSession);
-
-      // Update the working session with new child credentials
-      if (!this.session) {
-        this.session = { ...this.parentSession };
-      }
-
-      this.session.UID = childSession.UID;
-      this.session.AccessToken = childSession.AccessToken;
-      this.session.RefreshToken = childSession.RefreshToken;
-      this.session.keyPassword = childSession.keyPassword;
-      this.session.UserID = childSession.UserID;
-
-      logger.info('Successfully forked new child session');
-
-      return this.session;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error(`Failed to fork child session: ${message}`);
-
-      // Clear parent session if it's expired
-      if (message.includes('Parent session expired') || message.includes('INVALID_REFRESH_TOKEN')) {
-        this.parentSession = null;
-      }
-
-      if (this.parentSession) {
-        return this.fallbackToParentSession(message);
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * Refresh the access token with fork recovery
-   * If the refresh token is invalid/expired, attempts to fork a new child session
-   */
-  async refreshTokenWithForkRecovery(): Promise<Session> {
-    try {
-      return await this.refreshToken();
-    } catch (error) {
-      if (this.isInvalidRefreshTokenError(error) && this.parentSession) {
-        logger.info('Refresh token invalid, attempting fork recovery');
-        return await this.forkNewChildSession();
-      }
-      throw error;
-    }
   }
 
   /**

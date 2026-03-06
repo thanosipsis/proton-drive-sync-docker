@@ -38,19 +38,14 @@ function getKeyringPassword(): string {
   return process.env.KEYRING_PASSWORD || DEFAULT_KEYRING_PASSWORD;
 }
 
-/** Tokens stored in keychain for session reuse (parent/child session model) */
+/** Tokens stored in keychain for session reuse (single session model) */
 export interface StoredCredentials {
-  // Parent session (from initial login, used to fork new child sessions)
-  parentUID: string;
-  parentAccessToken: string;
-  parentRefreshToken: string;
+  // Session tokens
+  UID: string;
+  AccessToken: string;
+  RefreshToken: string;
 
-  // Child session (used for API operations, can be refreshed via forking)
-  childUID: string;
-  childAccessToken: string;
-  childRefreshToken: string;
-
-  // Shared credentials
+  // Credentials
   SaltedKeyPass: string;
   UserID: string;
   username: string;
