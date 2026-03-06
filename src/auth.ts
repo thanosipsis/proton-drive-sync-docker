@@ -1285,6 +1285,7 @@ export class ProtonAuth {
       UID: parentUID,
       AccessToken: parentAccessToken,
       RefreshToken: parentRefreshToken,
+      UserID: credentials.UserID,
       keyPassword: SaltedKeyPass,
       passwordMode: credentials.passwordMode,
     };
@@ -1294,6 +1295,7 @@ export class ProtonAuth {
       UID: childUID,
       AccessToken: childAccessToken,
       RefreshToken: childRefreshToken,
+      UserID: credentials.UserID,
       keyPassword: SaltedKeyPass,
       passwordMode: credentials.passwordMode,
     };
@@ -1306,6 +1308,8 @@ export class ProtonAuth {
         'core/v4/users'
       );
       this.session.user = userResponse.User;
+      this.session.UserID = this.session.UserID || userResponse.User?.ID;
+      this.parentSession.UserID = this.parentSession.UserID || this.session.UserID;
 
       // First, decrypt the user's primary key
       const primaryUserKey = this.session.user?.Keys?.[0];
