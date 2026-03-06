@@ -151,6 +151,8 @@ export async function createClientFromTokens(
 
   const auth = new ProtonAuth();
   const session = await auth.restoreSession(credentials);
+  const restoredCreds = auth.getReusableCredentials();
+  await storeCredentials({ ...restoredCreds, username: credentials.username });
 
   // Create refresh callback that updates tokens and persists to keychain
   const onTokenRefresh = async () => {
